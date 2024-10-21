@@ -1,6 +1,6 @@
 package: com.arichornlover.versionspoofer
 Name: YTAppVersionSpoofer
-Version: 1.0.3
+Version: 1.0.4
 Section: Tweaks
 Architecture: iphoneos-arm
 Description: An YouTube Tweak that lets you spoof the App Version.
