@@ -1,3 +1,6 @@
+#import <objc/runtime.h>
+#import "YouTubeHeader/YTIIcon.h"
+#import "YouTubeHeader/YTSettingsGroupData.h"
 #import "YouTubeHeader/YTSettingsViewController.h"
 #import "YouTubeHeader/YTSearchableSettingsViewController.h"
 #import "YouTubeHeader/YTSettingsSectionItem.h"
@@ -23,6 +26,28 @@ static int appVersionSpoofer() {
 
 #define LOC(x) [tweakBundle localizedStringForKey:x value:nil table:nil]
 
+static const NSInteger YTAppVersionSpooferSection = 'yavs';
+
+@interface NSObject (YTAppVersionSpooferSettings)
+- (void)reloadData;
+- (void)pushViewController:(UIViewController *)viewController;
+- (void)setSectionItems:(NSArray *)sectionItems
+            forCategory:(NSInteger)category
+                  title:(NSString *)title
+                   icon:(id)icon
+       titleDescription:(NSString *)titleDescription
+           headerHidden:(BOOL)headerHidden;
+- (void)setSectionItems:(NSArray *)sectionItems
+            forCategory:(NSInteger)category
+                  title:(NSString *)title
+       titleDescription:(NSString *)titleDescription
+           headerHidden:(BOOL)headerHidden;
+@end
+
+@interface YTSettingsSectionItemManager (YTAppVersionSpoofer)
+- (void)updateYTAppVersionSpooferSectionWithEntry:(id)entry;
+@end
+
 NSBundle *tweakBundle;
 
 extern NSBundle *YTAppVersionSpooferBundle();
@@ -42,15 +67,79 @@ NSBundle *YTAppVersionSpooferBundle() {
 
 %ctor {
     tweakBundle = YTAppVersionSpooferBundle();
+    %init;
 }
 
-%hook YTSettingsViewController
-- (void)setSectionItems:(NSMutableArray <YTSettingsSectionItem *> *)sectionItems forCategory:(NSInteger)category title:(NSString *)title titleDescription:(NSString *)titleDescription headerHidden:(BOOL)headerHidden {
+%hook YTAppSettingsPresentationData
 
-    if (category == 2) {
++ (NSArray<NSNumber *> *)settingsCategoryOrder {
+    NSArray<NSNumber *> *order = %orig;
+    if (!order) {
+        return @[@(YTAppVersionSpooferSection)];
+    }
+
+    NSMutableArray<NSNumber *> *mutableOrder = order.mutableCopy;
+    if ([mutableOrder containsObject:@(YTAppVersionSpooferSection)]) {
+        return mutableOrder.copy;
+    }
+
+    NSUInteger insertIndex = [order indexOfObject:@(1)];
+    if (insertIndex != NSNotFound) {
+        [mutableOrder insertObject:@(YTAppVersionSpooferSection) atIndex:insertIndex + 1];
+    } else {
+        [mutableOrder addObject:@(YTAppVersionSpooferSection)];
+    }
+
+    return mutableOrder.copy;
+}
+
+%end
+
+%hook YTSettingsGroupData
+
+- (NSArray<NSNumber *> *)orderedCategories {
+    if (self.type != 1 || class_getClassMethod(objc_getClass("YTSettingsGroupData"), @selector(tweaks))) {
+        return %orig;
+    }
+
+    NSArray *original = %orig;
+    NSMutableArray *mutableCategories = original ? original.mutableCopy : [NSMutableArray array];
+    if (![mutableCategories containsObject:@(YTAppVersionSpooferSection)]) {
+        [mutableCategories insertObject:@(YTAppVersionSpooferSection) atIndex:0];
+    }
+
+    return mutableCategories.copy;
+}
+
+%end
+
+%hook YTSettingsSectionItemManager
+
+%new(v@:@)
+- (void)updateYTAppVersionSpooferSectionWithEntry:(id)entry {
+    YTSettingsViewController *settingsViewController = nil;
+
+    @try {
+        settingsViewController = [self valueForKey:@"_dataDelegate"];
+    } @catch (id ex) {}
+
+    if (!settingsViewController) {
+        @try {
+            settingsViewController = [self valueForKey:@"_settingsViewControllerDelegate"];
+        } @catch (id ex) {}
+    }
+
+    if (!settingsViewController) {
+        return;
+    }
+
+    NSMutableArray<YTSettingsSectionItem *> *sectionItems = [NSMutableArray array];
+    Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
+
     SECTION_HEADER(@"App Version Spoofer");
 
     SWITCH(LOC(@"APP_VERSION_SPOOFER"), LOC(@"APP_VERSION_SPOOFER_DESC"), @"enableVersionSpoofer_enabled");
+
     YTSettingsSectionItem *versionSpoofer = [%c(YTSettingsSectionItem)
         itemWithTitle:LOC(@"VERSION_SPOOFER_TITLE")
         accessibilityIdentifier:nil
@@ -443,13 +532,39 @@ NSBundle *YTAppVersionSpooferBundle() {
                 SPOOFER_VERSION(@"v17.34.3", 125),
                 SPOOFER_VERSION(@"v17.33.2", 126)
             ];
-            YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"VERSION_SPOOFER_TITLE") pickerSectionTitle:nil rows:rows selectedItemIndex:appVersionSpoofer() parentResponder:[self parentResponder]];
+            YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"VERSION_SPOOFER_TITLE") pickerSectionTitle:nil rows:rows selectedItemIndex:appVersionSpoofer() parentResponder:settingsViewController];
             [settingsViewController pushViewController:picker];
             return YES;
         }
     ];
     [sectionItems addObject:versionSpoofer];
- }
-    %orig(sectionItems, category, title, titleDescription, headerHidden);
+
+    if ([settingsViewController respondsToSelector:@selector(setSectionItems:forCategory:title:icon:titleDescription:headerHidden:)]) {
+        YTIIcon *icon = [%c(YTIIcon) new];
+		icon.iconType = YT_SETTINGS;
+
+        [settingsViewController setSectionItems:sectionItems
+                                    forCategory:YTAppVersionSpooferSection
+                                          title:@"App Version Spoofer"
+                                           icon:icon
+                               titleDescription:nil
+                                   headerHidden:NO];
+    } else {
+        [settingsViewController setSectionItems:sectionItems
+                                    forCategory:YTAppVersionSpooferSection
+                                          title:@"App Version Spoofer"
+                               titleDescription:nil
+                                   headerHidden:NO];
+    }
 }
+
+- (void)updateSectionForCategory:(NSUInteger)category withEntry:(id)entry {
+    if (category == YTAppVersionSpooferSection) {
+        [self updateYTAppVersionSpooferSectionWithEntry:entry];
+        return;
+    }
+
+    %orig;
+}
+
 %end
