@@ -1,45 +1,93 @@
-name: Build YTAppVersionSpoofer deb
+name: Build and Draft Release YTAppVersionSpoofer
 
 on:
   workflow_dispatch:
-    
+
 jobs:
   build:
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@main
+    name: Build YTAppVersionSpoofer
+    runs-on: macos-latest
+    permissions:
+      contents: write
 
-      - name: Checkout theos/theos
-        uses: actions/checkout@main
+    steps:
+      - name: Checkout Main
+        uses: actions/checkout@v6
+        with:
+          path: main
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: brew install make ldid dpkg
+
+      - name: Set PATH environment variable
+        run: |
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+
+      - name: Cache Theos
+        id: theos
+        uses: actions/cache@v5
+        env:
+          cache-name: theos_cache_9bc7340
+        with:
+          path: theos/
+          key: ${{ env.cache-name }}
+          restore-keys: ${{ env.cache-name }}
+
+      - name: Setup Theos
+        if: ${{ steps.theos.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v6
         with:
           repository: theos/theos
-          ref: master
-          submodules: recursive
+          ref: 9bc73406cf80b711ef4d02c15ff1dedc4478a275
           path: theos
+          submodules: recursive
 
-      - name: Checkout theos/sdks
-        uses: actions/checkout@main
-        with:
-          repository: theos/sdks
-          ref: master
-          sparse-checkout: iPhoneOS16.5.sdk
-          path: theos/sdks
-
-      - name: Checkout PoomSmart/YouTubeHeader
-        uses: actions/checkout@main
-        with:
-          repository: PoomSmart/YouTubeHeader
-          ref: main
-          path: YouTubeHeader
-
-      - name: Build Package 
+      - name: Download iOS SDK
+        if: ${{ steps.theos.outputs.cache-hit != 'true' }}
         run: |
-          brew install make xz ldid 
-          export THEOS=theos
-          gmake clean package FINALPACKAGE=1
-          gmake clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
+          git checkout
+          mv *.sdk $THEOS/sdks
 
-      - name: Upload a Build Artifact
-        uses: actions/upload-artifact@v4
+      - name: Clone YouTubeHeader
+        run: |
+          if [ -d "$THEOS/include/YouTubeHeader" ]; then
+            cd $THEOS/include/YouTubeHeader && git pull
+          else
+            cd $THEOS/include && git clone --quiet --depth=1 https://github.com/PoomSmart/YouTubeHeader.git
+          fi
+          rm -rf "$THEOS/include/YTHeaders"
+          cp -r "$THEOS/include/YouTubeHeader" "$THEOS/include/YTHeaders"
+
+      - name: Build Package
+        run: |
+          cd main && make clean package DEBUG=0 FINALPACKAGE=1
+
+      - name: Extract Values
+        run: |
+          NAME=$(grep '^Name:' main/control | cut -d ' ' -f 2)
+          echo "NAME=$NAME" >> $GITHUB_ENV
+          PACKAGE=$(grep '^Package:' main/control | cut -d ' ' -f 2)
+          VERSION=$(grep '^Version:' main/control | cut -d ' ' -f 2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          ROOTLESS_DEB_FILE_NAME="${PACKAGE}_${VERSION}_iphoneos-arm64.deb"
+          echo "ROOTLESS_DEB_FILE_NAME=$ROOTLESS_DEB_FILE_NAME" >> $GITHUB_ENV
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v3
         with:
-          path: packages/*.deb
+          tag_name: v${{ env.VERSION }}
+          files: |
+            main/.theos/obj/${{ env.NAME }}.dylib
+            main/packages/${{ env.ROOTLESS_DEB_FILE_NAME }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          draft: true
+
+      - name: Output Release URL
+        run: |
+          echo "::notice::Release available at: https://github.com/${{ github.repository }}/releases"
